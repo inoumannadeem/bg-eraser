@@ -1,13 +1,20 @@
 from flask import Flask, request, send_file, render_template, jsonify
-import requests
-import os
 from PIL import Image
 import io
+import torch
+import os
+from u2net import U2NET, remove_background
+from download_model import download_u2net
 
 app = Flask(__name__)
 
-# You'll need to set your Remove.bg API key
-API_KEY = 'YOUR-API-KEY'  # Replace with your API key
+# Download and load the model
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = U2NET()
+download_u2net()
+model.load_state_dict(torch.load('models/u2net.pth', map_location=device))
+model.to(device)
+model.eval()
 
 @app.route('/')
 def index():
@@ -23,30 +30,26 @@ def remove_background():
         return jsonify({'error': 'No image selected'}), 400
 
     try:
-        # Read the image into memory
-        img_byte_arr = io.BytesIO()
-        Image.open(file.stream).save(img_byte_arr, format='PNG')
-        img_byte_arr.seek(0)
-
-        # Call remove.bg API
-        response = requests.post(
-            'https://api.remove.bg/v1.0/removebg',
-            files={'image_file': img_byte_arr},
-            headers={'X-Api-Key': API_KEY},
-        )
+        # Read the input image
+        input_image = Image.open(file.stream).convert('RGB')
         
-        if response.status_code == 200:
-            # Return the processed image
-            result = io.BytesIO(response.content)
-            result.seek(0)
-            return send_file(
-                result,
-                mimetype='image/png',
-                as_attachment=True,
-                download_name='removed_bg.png'
-            )
-        else:
-            return jsonify({'error': 'Failed to process image'}), 400
+        # Process with U^2-Net
+        output_image = remove_background(model, input_image)
+        
+        # Save to bytes
+        output_bytes = io.BytesIO()
+        output_image.save(output_bytes, format='PNG')
+        output_bytes.seek(0)
+        
+        return send_file(
+            output_bytes,
+            mimetype='image/png',
+            as_attachment=True,
+            download_name='removed_bg.png'
+        )
+    except Exception as e:
+        print(f'Error processing image: {str(e)}')
+        return jsonify({'error': str(e)}), 500
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
